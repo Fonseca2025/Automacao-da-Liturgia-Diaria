@@ -1,60 +1,60 @@
 import requests
 from bs4 import BeautifulSoup
 import os
+from datetime import datetime
+import pytz
 
 def get_liturgia():
-    # Site alternativo muito mais estável para automações
-    url = "https://www.catolico.org.br/liturgia_diaria.php"
+    # Define o fuso horário de Brasília para garantir a data correta
+    timezone = pytz.timezone('America/Sao_Paulo')
+    hoje = datetime.now(timezone).strftime('%d-%m-%Y')
+    
+    # URL dos Dehonianos (muito estável)
+    url = "https://dehonianos.org.br/liturgia/"
+    
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=30)
-        response.encoding = 'iso-8859-1' # Site antigo costuma usar esse encoding
+        response.encoding = 'utf-8'
         
         if response.status_code != 200:
-            return f"❌ Erro ao acessar site (Status {response.status_code})"
+            return f"❌ Erro ao acessar site: Status {response.status_code}"
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # No catolico.org.br, o texto principal fica dentro de divs ou tabelas simples
-        # Vamos buscar o conteúdo principal
-        corpo = soup.find("div", class_="conteudo_interna")
+        # No site dos Dehonianos, o conteúdo fica dentro da classe 'entry-content'
+        corpo = soup.find("div", class_="entry-content")
         
         if not corpo:
-            # Segunda tentativa: busca por tags de texto direto
-            corpo = soup.find("td", class_="texto")
+            return "⚠️ Não foi possível encontrar o conteúdo da liturgia."
 
-        if not corpo:
-            return "⚠️ Estrutura do site não reconhecida. Tente novamente mais tarde."
-
-        # Limpeza de tags desnecessárias (scripts, estilos, links de propaganda)
-        for tag in corpo(["script", "style", "a", "ins"]):
-            tag.decompose()
-
-        # Montagem do texto
-        texto_final = "<b>📖 LITURGIA DIÁRIA</b>\n"
+        # Montagem do texto em HTML
+        texto_final = f"<b>📖 LITURGIA DIÁRIA ({hoje})</b>\n"
         texto_final += "━━━━━━━━━━━━━━━━━━\n\n"
 
-        # Pegamos os parágrafos e títulos
-        elementos = corpo.find_all(['h2', 'h3', 'p', 'strong', 'b'])
-        
-        for el in elementos:
-            txt = el.get_text(strip=True)
-            if not txt or len(txt) < 3:
-                continue
+        # Extraindo títulos e parágrafos
+        # Eles usam <h4> ou <strong> para os títulos das leituras
+        for elemento in corpo.find_all(['h4', 'p', 'strong']):
+            txt = elemento.get_text(strip=True)
             
-            # Se for um título (Leitura, Salmo, Evangelho)
-            if el.name in ['h2', 'h3'] or "Leitura" in txt or "Evangelho" in txt or "Salmo" in txt:
-                texto_final += f"\n<b>{txt.upper()}</b>\n"
+            if not txt or len(txt) < 2:
+                continue
+                
+            # Identifica títulos (Leitura, Salmo, Evangelho)
+            if elemento.name == 'h4' or "LEITURA" in txt.upper() or "EVANGELHO" in txt.upper() or "SALMO" in txt.upper():
+                texto_final += f"\n<pre>📑 {txt.upper()}</pre>\n"
             else:
-                texto_final += f"{txt}\n\n"
+                # Se for a citação bíblica (ex: Jo 3, 16)
+                if any(livro in txt for livro in ["Mt ", "Mc ", "Lc ", "Jo ", "At ", "Sl "]):
+                    texto_final += f"<i>📍 {txt}</i>\n\n"
+                else:
+                    texto_final += f"{txt}\n\n"
 
-        if len(texto_final) < 200:
-            return "⚠️ O texto extraído ficou muito curto. O site pode ter mudado."
+        if len(texto_final) < 300:
+             return "⚠️ O conteúdo parece incompleto. Tente o link oficial: " + url
 
         return texto_final
 
@@ -66,22 +66,18 @@ def send_telegram(text):
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
     if not token or not chat_id:
-        print("Erro: Token ou ID não configurados nas Secrets.")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    # Dividir se o texto for muito longo (Telegram aceita 4096 caracteres)
+    # O Telegram aceita 4096 caracteres. Se passar, dividimos.
     if len(text) > 4000:
         partes = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for parte in partes:
-            data = {"chat_id": chat_id, "text": parte, "parse_mode": "HTML"}
-            requests.post(url, data=data)
+            requests.post(url, data={"chat_id": chat_id, "text": parte, "parse_mode": "HTML"})
     else:
-        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-        requests.post(url, data=data)
+        requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
 if __name__ == "__main__":
     resultado = get_liturgia()
     send_telegram(resultado)
-    print("Execução finalizada.")
