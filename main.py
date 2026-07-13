@@ -3,85 +3,85 @@ from bs4 import BeautifulSoup
 import os
 
 def get_liturgia():
-    # Usando o site da Paulus como alternativa robusta
-    url = "https://www.paulus.com.br/portal/liturgia-diaria/"
+    # Site alternativo muito mais estável para automações
+    url = "https://www.catolico.org.br/liturgia_diaria.php"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=30)
-        response.encoding = 'utf-8'
+        response.encoding = 'iso-8859-1' # Site antigo costuma usar esse encoding
+        
+        if response.status_code != 200:
+            return f"❌ Erro ao acessar site (Status {response.status_code})"
+
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1. Pegar a data/título
-        # No site da Paulus, o conteúdo principal fica dentro de uma div com classe 'content'
-        container = soup.find("div", class_="texto_liturgia")
+        # No catolico.org.br, o texto principal fica dentro de divs ou tabelas simples
+        # Vamos buscar o conteúdo principal
+        corpo = soup.find("div", class_="conteudo_interna")
         
-        if not container:
-            # Tenta um seletor alternativo se o principal falhar
-            container = soup.find("div", class_="post")
+        if not corpo:
+            # Segunda tentativa: busca por tags de texto direto
+            corpo = soup.find("td", class_="texto")
 
-        if not container:
-            return "⚠️ Não foi possível localizar o texto da liturgia no site da Paulus."
+        if not corpo:
+            return "⚠️ Estrutura do site não reconhecida. Tente novamente mais tarde."
 
-        # 2. Limpeza e Formatação
-        # Vamos extrair os textos de forma organizada
-        texto_bruto = ""
+        # Limpeza de tags desnecessárias (scripts, estilos, links de propaganda)
+        for tag in corpo(["script", "style", "a", "ins"]):
+            tag.decompose()
+
+        # Montagem do texto
+        texto_final = "<b>📖 LITURGIA DIÁRIA</b>\n"
+        texto_final += "━━━━━━━━━━━━━━━━━━\n\n"
+
+        # Pegamos os parágrafos e títulos
+        elementos = corpo.find_all(['h2', 'h3', 'p', 'strong', 'b'])
         
-        # O site da Paulus organiza por títulos e parágrafos
-        for elemento in container.find_all(['h1', 'h2', 'h3', 'p', 'strong']):
-            txt = elemento.get_text(strip=True)
-            if not txt:
+        for el in elementos:
+            txt = el.get_text(strip=True)
+            if not txt or len(txt) < 3:
                 continue
-                
-            if elemento.name in ['h1', 'h2', 'h3']:
-                texto_bruto += f"\n<b>{txt.upper()}</b>\n"
-            elif elemento.name == 'strong':
-                texto_bruto += f"<b>{txt}</b> "
+            
+            # Se for um título (Leitura, Salmo, Evangelho)
+            if el.name in ['h2', 'h3'] or "Leitura" in txt or "Evangelho" in txt or "Salmo" in txt:
+                texto_final += f"\n<b>{txt.upper()}</b>\n"
             else:
-                texto_bruto += f"{txt}\n\n"
+                texto_final += f"{txt}\n\n"
 
-        if len(texto_bruto) < 100:
-            return "⚠️ O conteúdo extraído parece estar incompleto."
+        if len(texto_final) < 200:
+            return "⚠️ O texto extraído ficou muito curto. O site pode ter mudado."
 
-        # Cabeçalho decorativo
-        mensagem_final = "<b>📖 LITURGIA DIÁRIA</b>\n"
-        mensagem_final += "━━━━━━━━━━━━━━━━━━\n"
-        mensagem_final += texto_bruto
-
-        return mensagem_final
+        return texto_final
 
     except Exception as e:
-        return f"❌ Erro ao acessar o site: {str(e)}"
+        return f"❌ Erro crítico: {str(e)}"
 
 def send_telegram(text):
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
     if not token or not chat_id:
-        print("Erro: Token ou ID não configurados.")
+        print("Erro: Token ou ID não configurados nas Secrets.")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    # Se o texto for muito grande, divide em partes (limite 4096)
+    # Dividir se o texto for muito longo (Telegram aceita 4096 caracteres)
     if len(text) > 4000:
-        # Divide por parágrafos para não cortar palavras ao meio
-        partes = text.split('\n\n')
-        mensagem_atual = ""
+        partes = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for parte in partes:
-            if len(mensagem_atual) + len(parte) < 4000:
-                mensagem_atual += parte + "\n\n"
-            else:
-                requests.post(url, data={"chat_id": chat_id, "text": mensagem_atual, "parse_mode": "HTML"})
-                mensagem_atual = parte + "\n\n"
-        # Envia a última parte
-        if mensagem_atual:
-            requests.post(url, data={"chat_id": chat_id, "text": mensagem_atual, "parse_mode": "HTML"})
+            data = {"chat_id": chat_id, "text": parte, "parse_mode": "HTML"}
+            requests.post(url, data=data)
     else:
-        requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        requests.post(url, data=data)
 
 if __name__ == "__main__":
     resultado = get_liturgia()
     send_telegram(resultado)
+    print("Execução finalizada.")
