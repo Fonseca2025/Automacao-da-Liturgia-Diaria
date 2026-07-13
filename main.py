@@ -2,8 +2,9 @@ import requests
 from bs4 import BeautifulSoup
 import os
 
-def get_liturgia_cnbb():
-    url = "https://liturgiadiaria.edicoescnbb.com.br/"
+def get_liturgia():
+    # Usando Canção Nova por ser mais estável para robôs
+    url = "https://liturgia.cancaonova.com/pb/"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -13,73 +14,73 @@ def get_liturgia_cnbb():
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1. Pegar a data
-        dia_tag = soup.find("h2", class_="header-liturgia")
-        dia_info = dia_tag.get_text(strip=True) if dia_tag else "Liturgia Diária"
+        # 1. Pegar o título/data
+        titulo = soup.find("h1", class_="entry-title")
+        dia = titulo.get_text(strip=True) if titulo else "Liturgia de Hoje"
 
-        # 2. Pegar a cor
-        cor_tag = soup.find("div", id="cor-liturgica-dia")
-        cor_info = cor_tag.get_text(strip=True) if cor_tag else "Não informada"
-
-        mensagem = f"📖 *LITURGIA DIÁRIA*\n📅 {dia_info}\n🎨 *Cor:* {cor_info}\n"
+        mensagem = f"📖 *LITURGIA DIÁRIA*\n📅 {dia}\n"
         mensagem += "━━━━━━━━━━━━━━━━━━\n\n"
 
-        # 3. Pegar as leituras de forma robusta
-        leituras = soup.find_all("div", class_="col-12")
-        conteudo_detectado = False
-
-        for item in leituras:
-            titulo_tag = item.find("h3", class_="titulo-leitura")
-            ref_tag = item.find("p", class_="referencia-leitura")
-            texto_tag = item.find("div", class_="texto-leitura")
-
-            if titulo_tag:
-                conteudo_detectado = True
-                titulo = titulo_tag.get_text(strip=True).upper()
-                mensagem += f"📑 *{titulo}*\n"
+        # 2. Pegar as leituras
+        # Na Canção Nova, as leituras ficam dentro de divs com IDs específicos
+        # como 'leitura-1', 'salmo', 'evangelho'
+        secoes = soup.find_all("div", class_="content-liturgia")
+        
+        conteudo_encontrado = False
+        for secao in secoes:
+            conteudo_encontrado = True
+            
+            # Título da parte (ex: 1ª Leitura)
+            h3 = secao.find("h3")
+            if h3:
+                mensagem += f"📑 *{h3.get_text(strip=True).upper()}*\n"
+            
+            # Referência (ex: Ap 1,1-4; 2,1-5)
+            ref = secao.find("span", class_="referencia-leitura")
+            if ref:
+                mensagem += f"📍 _{ref.get_text(strip=True)}_\n\n"
+            
+            # Texto da leitura
+            # Removemos scripts e propagandas que podem estar no meio
+            for extra in secao.find_all(["script", "style", "ins"]):
+                extra.decompose()
                 
-                if ref_tag:
-                    ref = ref_tag.get_text(strip=True)
-                    mensagem += f"📍 _{ref}_\n\n"
+            texto = secao.get_text(separator='\n').strip()
+            # Limpeza simples para não repetir o título no corpo do texto
+            if h3 and h3.get_text(strip=True) in texto:
+                texto = texto.replace(h3.get_text(strip=True), "", 1).strip()
+            if ref and ref.get_text(strip=True) in texto:
+                texto = texto.replace(ref.get_text(strip=True), "", 1).strip()
                 
-                if texto_tag:
-                    # Correção do erro da barra invertida: processamos o texto fora da f-string
-                    texto_puro = texto_tag.get_text(separator='\n').strip()
-                    mensagem += texto_puro + "\n\n"
-                    mensagem += "──────────────────\n\n"
+            mensagem += texto + "\n\n"
+            mensagem += "──────────────────\n\n"
 
-        if not conteudo_detectado:
-            # Fallback caso a estrutura mude muito
-            corpo_site = soup.find("div", id="liturgia-diaria")
-            if corpo_site:
-                texto_fallback = corpo_site.get_text(separator='\n', strip=True)
-                return "📖 *LITURGIA (Modo de Segurança)*\n\n" + texto_fallback
-            return "⚠️ Não foi possível extrair os textos hoje. Verifique o site: " + url
+        if not conteudo_encontrado:
+            return "⚠️ Não consegui extrair os textos. O formato do site pode ter mudado."
 
         return mensagem
 
     except Exception as e:
-        return f"❌ Erro ao acessar o site: {str(e)}"
+        return f"❌ Erro de conexão: {str(e)}"
 
 def send_telegram(text):
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
     if not token or not chat_id:
-        print("Erro: Chaves não configuradas no GitHub Secrets.")
+        print("Erro: Token ou Chat ID não configurados.")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    # Se o texto for muito grande (limite do Telegram é 4096), divide em partes
+    # Quebra o texto se passar de 4000 caracteres
     if len(text) > 4000:
-        for i in range(0, len(text), 4000):
-            part = text[i:i+4000]
-            requests.post(url, data={"chat_id": chat_id, "text": part, "parse_mode": "Markdown"})
+        partes = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        for parte in partes:
+            requests.post(url, data={"chat_id": chat_id, "text": parte, "parse_mode": "Markdown"})
     else:
         requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
-    resultado = get_liturgia_cnbb()
+    resultado = get_liturgia()
     send_telegram(resultado)
-    print("Processo finalizado.")
