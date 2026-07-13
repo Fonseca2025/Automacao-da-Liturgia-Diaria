@@ -2,8 +2,8 @@ name: Enviar Liturgia Diaria
 
 on:
   schedule:
-    # 09:00 UTC é 06:00 no Horário de Brasília
-    - cron: '0 9 * * *'
+    # 12:00 UTC equivale a 09:00 no Horário de Brasília
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
